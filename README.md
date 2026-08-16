@@ -15,9 +15,9 @@ No install, no runtime downloads — just run `ReforgerTexturePacker.exe`
 
 ## Download
 
-Grab `ReforgerTexturePacker.exe` from the
-[latest release](../../releases/latest) — direct link:
-`.../releases/latest/download/ReforgerTexturePacker.exe`
+**[Download ReforgerTexturePacker.exe](../../raw/main/ReforgerTexturePacker.exe)** (~42 KB)
+
+No installer — save it anywhere and double-click.
 
 ## What it outputs
 

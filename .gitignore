@@ -1,2 +1,1 @@
-# built exe ships as a GitHub release asset, not in the repo
-/ReforgerTexturePacker.exe
+# nothing ignored - the built exe is committed so the repo raw link doubles as the download
