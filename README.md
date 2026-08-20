@@ -62,13 +62,15 @@ the maps you already loaded:
   surface creases, wear happens on raised edges.
 - Optionally weighted by **roughness** (dirt sticks to rough areas) and **albedo darkness**
   from the base color.
-- Per-channel sliders: strength, blur (spread), base level, roughness influence, darkness
-  influence, and a pick-up mode: **Crevices** (dirt/grime), **Edges** (wear/scratches),
-  **Both**, or **Flat areas** (the inverse — untouched surfaces). Settings tuned on the
-  preview are automatically rescaled for the full-resolution export.
-- The `_GLOBAL_MASK` layout row maps sources onto the PBRMulti sub-material channels
-  (**black = Material 1, R = Material 2, G = Material 3, B = Material 4**) — each channel
-  can take the dirt mask, mud mask, an inverted copy, solid white, or nothing.
+- **Three independent generators (Mask A / B / C)**, each with its own sliders: strength,
+  blur (spread), base level, roughness influence, darkness influence, and a pick-up mode:
+  **Crevices** (dirt/grime), **Edges** (wear/scratches), **Both**, or **Flat areas** (the
+  inverse — untouched surfaces). Settings tuned on the preview are automatically rescaled
+  for the full-resolution export.
+- `_VFX` exports Mask A into red (dirt) and Mask B into green (mud).
+- The `_GLOBAL_MASK` layout row routes any of Mask A/B/C, inverted copies, solid white, or
+  nothing into the PBRMulti sub-material channels (**black = Material 1, R = Material 2,
+  G = Material 3, B = Material 4**).
 
 Note: `_GLOBAL_MASK` needs its compression set manually in Workbench import settings
 (`RedHQCompression` for an R-only mask, `ColorHQCompression` for an RGB mask) — the wiki
