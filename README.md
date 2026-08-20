@@ -65,12 +65,14 @@ the maps you already loaded:
 - **Three independent generators (Mask A / B / C)**, each with its own sliders: strength,
   blur (spread), base level, roughness influence, darkness influence, and a pick-up mode:
   **Crevices** (dirt/grime), **Edges** (wear/scratches), **Both**, or **Flat areas** (the
-  inverse — untouched surfaces). Settings tuned on the preview are automatically rescaled
-  for the full-resolution export.
+  inverse — untouched surfaces). The export is exactly the previewed mask, resampled to
+  the chosen export size — what you see is what you get.
 - `_VFX` exports Mask A into red (dirt) and Mask B into green (mud).
 - The `_GLOBAL_MASK` layout row routes any of Mask A/B/C, inverted copies, solid white, or
   nothing into the PBRMulti sub-material channels (**black = Material 1, R = Material 2,
   G = Material 3, B = Material 4**).
+- **Export size** caps the mask resolution (Auto/2048/…/128, aspect kept, never upscales) —
+  VFX and global masks rarely need full material resolution.
 
 Note: `_GLOBAL_MASK` needs its compression set manually in Workbench import settings
 (`RedHQCompression` for an R-only mask, `ColorHQCompression` for an RGB mask) — the wiki

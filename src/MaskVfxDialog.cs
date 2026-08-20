@@ -29,6 +29,7 @@ namespace ReforgerTexturePacker
         private PictureBox _preview;
         private ComboBox _cmbView;
         private ComboBox _cmbMaskR, _cmbMaskG, _cmbMaskB;
+        private ComboBox _cmbSize;
         private Label _status;
         private MaskChannelSettings _a = new MaskChannelSettings();
         private MaskChannelSettings _b = new MaskChannelSettings();
@@ -98,27 +99,45 @@ namespace ReforgerTexturePacker
             _cmbMaskG = MaskSourceCombo(grpLayout, 139, "G = Mat 3:", 2);
             _cmbMaskB = MaskSourceCombo(grpLayout, 270, "B = Mat 4:", 3);
 
+            Label lsize = new Label();
+            lsize.Text = "Export size:";
+            lsize.SetBounds(868, 304, 72, 16);
+            Controls.Add(lsize);
+
+            _cmbSize = new ComboBox();
+            _cmbSize.DropDownStyle = ComboBoxStyle.DropDownList;
+            _cmbSize.Items.AddRange(new object[] { "Auto", "2048", "1024", "512", "256", "128" });
+            _cmbSize.SelectedIndex = 2;
+            _cmbSize.SetBounds(944, 300, 86, 23);
+            Controls.Add(_cmbSize);
+
+            Label lsizeHint = new Label();
+            lsizeHint.Text = "(masks rarely need full res - 512/1024 is typical)";
+            lsizeHint.SetBounds(1038, 304, 240, 16);
+            lsizeHint.ForeColor = Theme.SubText;
+            Controls.Add(lsizeHint);
+
             Button btnVfx = new Button();
             btnVfx.Text = "Export _VFX";
-            btnVfx.SetBounds(868, 300, 130, 30);
+            btnVfx.SetBounds(868, 334, 130, 30);
             btnVfx.Click += delegate { Export(false); };
             Controls.Add(btnVfx);
 
             Button btnMask = new Button();
             btnMask.Text = "Export _GLOBAL_MASK";
-            btnMask.SetBounds(1004, 300, 164, 30);
+            btnMask.SetBounds(1004, 334, 164, 30);
             btnMask.Click += delegate { Export(true); };
             Controls.Add(btnMask);
 
             Button btnClose = new Button();
             btnClose.Text = "Close";
-            btnClose.SetBounds(1174, 300, 94, 30);
+            btnClose.SetBounds(1174, 334, 94, 30);
             btnClose.Click += delegate { Close(); };
             Controls.Add(btnClose);
 
             Label lnote = new Label();
             lnote.Text = "_VFX always exports Mask A into red + Mask B into green.";
-            lnote.SetBounds(868, 340, 400, 16);
+            lnote.SetBounds(868, 374, 400, 16);
             lnote.ForeColor = Theme.SubText;
             Controls.Add(lnote);
 
@@ -325,21 +344,13 @@ namespace ReforgerTexturePacker
             Cursor = Cursors.WaitCursor;
             try
             {
-                // recompute at full resolution; scale blur + curvature gain so it matches the preview look
-                Bitmap nm = Packer.EnsureSize(Packer.LoadBitmap(_ctx.NormalPath), _fullW, _fullH);
-                byte[] nr = Packer.ExtractChannel(nm, "R");
-                byte[] ng = Packer.ExtractChannel(nm, "G");
-                nm.Dispose();
-                if (_ctx.FlipGreen)
-                    Packer.Invert(ng);
-                float[] curv = MaskGen.Curvature(nr, ng, _fullW, _fullH);
-                byte[] rough = LoadAux(_ctx.RoughPath, _ctx.RoughChannel, _ctx.RoughInvert, _fullW, _fullH);
-                byte[] luma = LoadAux(_ctx.BasePath, "Luma", false, _fullW, _fullH);
-
-                double resScale = (double)Math.Max(_fullW, _fullH) / Math.Max(_pw, _ph);
-                byte[] a = MaskGen.Combine(curv, rough, luma, _fullW, _fullH, ScaledForExport(_a, resScale), resScale);
-                byte[] b = MaskGen.Combine(curv, rough, luma, _fullW, _fullH, ScaledForExport(_b, resScale), resScale);
-                byte[] c = MaskGen.Combine(curv, rough, luma, _fullW, _fullH, ScaledForExport(_c, resScale), resScale);
+                // export EXACTLY what the preview shows, resampled to the export size -
+                // regenerating at full res saturates on fine-grained normals (wood etc).
+                Size t = GetExportSize();
+                int tw = t.Width, th = t.Height;
+                byte[] a = ResizeMask(_maskA, _pw, _ph, tw, th);
+                byte[] b = ResizeMask(_maskB, _pw, _ph, tw, th);
+                byte[] c = ResizeMask(_maskC, _pw, _ph, tw, th);
 
                 string dir = string.IsNullOrEmpty(_ctx.OutDir) ? Path.GetDirectoryName(_ctx.NormalPath) : _ctx.OutDir;
                 Directory.CreateDirectory(dir);
@@ -352,16 +363,16 @@ namespace ReforgerTexturePacker
                     ResolveMask(_cmbMaskG.SelectedIndex, a, b, c, out mg, out dg);
                     ResolveMask(_cmbMaskB.SelectedIndex, a, b, c, out mb, out db);
                     string path = Path.Combine(dir, bn + "_GLOBAL_MASK.tif");
-                    using (Bitmap outBmp = Packer.Compose(_fullW, _fullH, mr, dr, mg, dg, mb, db, null, 255))
+                    using (Bitmap outBmp = Packer.Compose(tw, th, mr, dr, mg, dg, mb, db, null, 255))
                         Packer.SaveTiffLzw(outBmp, path);
-                    _status.Text = "Saved " + path + "   (R=Mat2 G=Mat3 B=Mat4, black=Mat1; set compression manually: R-only=RedHQ, RGB=ColorHQ)";
+                    _status.Text = string.Format("Saved {0}   ({1}x{2}, R=Mat2 G=Mat3 B=Mat4, black=Mat1; set compression manually: R-only=RedHQ, RGB=ColorHQ)", path, tw, th);
                 }
                 else
                 {
                     string path = Path.Combine(dir, bn + "_VFX.tif");
-                    using (Bitmap outBmp = Packer.Compose(_fullW, _fullH, a, 0, b, 0, null, 0, null, 255))
+                    using (Bitmap outBmp = Packer.Compose(tw, th, a, 0, b, 0, null, 0, null, 255))
                         Packer.SaveTiffLzw(outBmp, path);
-                    _status.Text = string.Format("Saved {0}   ({1}x{2}, R=dirt G=mud, LZW)", path, _fullW, _fullH);
+                    _status.Text = string.Format("Saved {0}   ({1}x{2}, R=dirt G=mud, LZW)", path, tw, th);
                 }
             }
             catch (Exception ex)
@@ -374,16 +385,38 @@ namespace ReforgerTexturePacker
             }
         }
 
-        private static MaskChannelSettings ScaledForExport(MaskChannelSettings s, double resScale)
+        private Size GetExportSize()
         {
-            MaskChannelSettings c = new MaskChannelSettings();
-            c.Strength = s.Strength;
-            c.Blur = (int)Math.Round(s.Blur * resScale);
-            c.BaseLevel = s.BaseLevel;
-            c.RoughWeight = s.RoughWeight;
-            c.DarkWeight = s.DarkWeight;
-            c.Mode = s.Mode;
-            return c;
+            string sel = (string)_cmbSize.SelectedItem;
+            if (sel == "Auto")
+                return new Size(_fullW, _fullH);
+            int cap = int.Parse(sel);
+            int max = Math.Max(_fullW, _fullH);
+            if (max <= cap)
+                return new Size(_fullW, _fullH);
+            double s = (double)cap / max;
+            return new Size(Math.Max(1, (int)Math.Round(_fullW * s)),
+                            Math.Max(1, (int)Math.Round(_fullH * s)));
+        }
+
+        // Bilinear on purpose - bicubic overshoots on hard mask edges and clips to 255.
+        private static byte[] ResizeMask(byte[] m, int w, int h, int tw, int th)
+        {
+            if (w == tw && h == th)
+                return m;
+            Bitmap src = Packer.Compose(w, h, m, 0, m, 0, m, 0, null, 255);
+            Bitmap dst = new Bitmap(tw, th, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(dst))
+            {
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.DrawImage(src, new Rectangle(0, 0, tw, th), 0, 0, w, h, GraphicsUnit.Pixel);
+            }
+            src.Dispose();
+            byte[] outv = Packer.ExtractChannel(dst, "R");
+            dst.Dispose();
+            return outv;
         }
     }
 }
