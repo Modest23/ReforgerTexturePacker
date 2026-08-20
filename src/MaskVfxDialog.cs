@@ -27,6 +27,7 @@ namespace ReforgerTexturePacker
         private MaskGenContext _ctx;
         private PictureBox _preview;
         private ComboBox _cmbView;
+        private ComboBox _cmbMaskR, _cmbMaskG, _cmbMaskB;
         private Label _status;
         private MaskChannelSettings _dirt = new MaskChannelSettings();
         private MaskChannelSettings _mud = new MaskChannelSettings();
@@ -46,7 +47,7 @@ namespace ReforgerTexturePacker
             Font = new Font("Segoe UI", 9F);
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(932, 562);
+            ClientSize = new Size(932, 586);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -68,7 +69,7 @@ namespace ReforgerTexturePacker
 
             _cmbView = new ComboBox();
             _cmbView.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cmbView.Items.AddRange(new object[] { "Dirt (R)", "Mud (G)", "VFX composite" });
+            _cmbView.Items.AddRange(new object[] { "Dirt (R)", "Mud (G)", "VFX composite", "Global Mask (RGB)" });
             _cmbView.SelectedIndex = 2;
             _cmbView.SetBounds(72, 500, 150, 23);
             _cmbView.SelectedIndexChanged += delegate { RenderPreview(); };
@@ -83,26 +84,35 @@ namespace ReforgerTexturePacker
             BuildChannelGroup("Dirt mask  ->  _VFX red", 500, 12, _dirt);
             BuildChannelGroup("Mud mask  ->  _VFX green", 500, 236, _mud);
 
+            // PBRMulti global mask: black = Material 1, R/G/B = Materials 2/3/4.
+            DarkGroupBox grpLayout = new DarkGroupBox();
+            grpLayout.Text = "_GLOBAL_MASK layout  (PBRMulti: black = Mat 1)";
+            grpLayout.SetBounds(500, 458, 420, 56);
+            Controls.Add(grpLayout);
+            _cmbMaskR = MaskSourceCombo(grpLayout, 10, "R = Mat 2:", 1);
+            _cmbMaskG = MaskSourceCombo(grpLayout, 150, "G = Mat 3:", 0);
+            _cmbMaskB = MaskSourceCombo(grpLayout, 290, "B = Mat 4:", 0);
+
             Button btnVfx = new Button();
             btnVfx.Text = "Export _VFX";
-            btnVfx.SetBounds(500, 462, 150, 30);
+            btnVfx.SetBounds(500, 522, 150, 30);
             btnVfx.Click += delegate { Export(false); };
             Controls.Add(btnVfx);
 
             Button btnMask = new Button();
             btnMask.Text = "Export _GLOBAL_MASK";
-            btnMask.SetBounds(656, 462, 170, 30);
+            btnMask.SetBounds(656, 522, 170, 30);
             btnMask.Click += delegate { Export(true); };
             Controls.Add(btnMask);
 
             Button btnClose = new Button();
             btnClose.Text = "Close";
-            btnClose.SetBounds(836, 462, 84, 30);
+            btnClose.SetBounds(836, 522, 84, 30);
             btnClose.Click += delegate { Close(); };
             Controls.Add(btnClose);
 
             _status = new Label();
-            _status.SetBounds(12, 532, 908, 20);
+            _status.SetBounds(12, 560, 908, 20);
             _status.AutoEllipsis = true;
             _status.ForeColor = Theme.SubText;
             _status.Text = "Dirt/mud are picked up from normal-map crevices, weighted by roughness and dark albedo.";
@@ -129,11 +139,45 @@ namespace ReforgerTexturePacker
             g.Controls.Add(lm);
             ComboBox cm = new ComboBox();
             cm.DropDownStyle = ComboBoxStyle.DropDownList;
-            cm.Items.AddRange(new object[] { "Crevices", "Edges" });
-            cm.SelectedIndex = s.EdgeMode ? 1 : 0;
+            cm.Items.AddRange(new object[] { "Crevices", "Edges", "Both", "Flat areas" });
+            cm.SelectedIndex = s.Mode;
             cm.SetBounds(84, 184, 110, 23);
-            cm.SelectedIndexChanged += delegate { s.EdgeMode = cm.SelectedIndex == 1; UpdateMasks(); };
+            cm.SelectedIndexChanged += delegate { s.Mode = cm.SelectedIndex; UpdateMasks(); };
             g.Controls.Add(cm);
+        }
+
+        private ComboBox MaskSourceCombo(Control parent, int x, string caption, int defIdx)
+        {
+            Label l = new Label();
+            l.Text = caption;
+            l.SetBounds(x, 26, 62, 16);
+            parent.Controls.Add(l);
+            ComboBox c = new ComboBox();
+            c.DropDownStyle = ComboBoxStyle.DropDownList;
+            c.Items.AddRange(new object[] { "None", "Dirt", "Mud", "Dirt inv", "Mud inv", "White" });
+            c.SelectedIndex = defIdx;
+            c.SetBounds(x + 62, 22, 66, 23);
+            c.SelectedIndexChanged += delegate { RenderPreview(); };
+            parent.Controls.Add(c);
+            return c;
+        }
+
+        private static void ResolveMask(int sel, byte[] dirt, byte[] mud, out byte[] arr, out byte def)
+        {
+            arr = null;
+            def = 0;
+            if (sel == 1) arr = dirt;
+            else if (sel == 2) arr = mud;
+            else if (sel == 3) arr = InvertCopy(dirt);
+            else if (sel == 4) arr = InvertCopy(mud);
+            else if (sel == 5) def = 255;
+        }
+
+        private static byte[] InvertCopy(byte[] src)
+        {
+            byte[] c = (byte[])src.Clone();
+            Packer.Invert(c);
+            return c;
         }
 
         private void AddSlider(Control parent, int y, string caption, int min, int max, int val, Action<int> onChange)
@@ -240,6 +284,14 @@ namespace ReforgerTexturePacker
                 bmp = Packer.Compose(_pw, _ph, _dirtMask, 0, _dirtMask, 0, _dirtMask, 0, null, 255);
             else if (view == 1)
                 bmp = Packer.Compose(_pw, _ph, _mudMask, 0, _mudMask, 0, _mudMask, 0, null, 255);
+            else if (view == 3)
+            {
+                byte[] mr, mg, mb; byte dr, dg, db;
+                ResolveMask(_cmbMaskR.SelectedIndex, _dirtMask, _mudMask, out mr, out dr);
+                ResolveMask(_cmbMaskG.SelectedIndex, _dirtMask, _mudMask, out mg, out dg);
+                ResolveMask(_cmbMaskB.SelectedIndex, _dirtMask, _mudMask, out mb, out db);
+                bmp = Packer.Compose(_pw, _ph, mr, dr, mg, dg, mb, db, null, 255);
+            }
             else
                 bmp = Packer.Compose(_pw, _ph, _dirtMask, 0, _mudMask, 0, null, 0, null, 255);
             if (_preview.Image != null)
@@ -280,11 +332,14 @@ namespace ReforgerTexturePacker
 
                 if (asGlobalMask)
                 {
-                    byte[] src = _cmbView.SelectedIndex == 1 ? mud : dirt;
+                    byte[] mr, mg, mb; byte dr, dg, db;
+                    ResolveMask(_cmbMaskR.SelectedIndex, dirt, mud, out mr, out dr);
+                    ResolveMask(_cmbMaskG.SelectedIndex, dirt, mud, out mg, out dg);
+                    ResolveMask(_cmbMaskB.SelectedIndex, dirt, mud, out mb, out db);
                     string path = Path.Combine(dir, bn + "_GLOBAL_MASK.tif");
-                    using (Bitmap outBmp = Packer.Compose(_fullW, _fullH, src, 0, src, 0, src, 0, null, 255))
+                    using (Bitmap outBmp = Packer.Compose(_fullW, _fullH, mr, dr, mg, dg, mb, db, null, 255))
                         Packer.SaveTiffLzw(outBmp, path);
-                    _status.Text = "Saved " + path + "   (grayscale; set RedHQCompression manually in Workbench import settings)";
+                    _status.Text = "Saved " + path + "   (R=Mat2 G=Mat3 B=Mat4, black=Mat1; set compression manually: R-only=RedHQ, RGB=ColorHQ)";
                 }
                 else
                 {
@@ -312,7 +367,7 @@ namespace ReforgerTexturePacker
             c.BaseLevel = s.BaseLevel;
             c.RoughWeight = s.RoughWeight;
             c.DarkWeight = s.DarkWeight;
-            c.EdgeMode = s.EdgeMode;
+            c.Mode = s.Mode;
             return c;
         }
     }

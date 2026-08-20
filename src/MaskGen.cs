@@ -9,7 +9,7 @@ namespace ReforgerTexturePacker
         public double BaseLevel = 0.05;
         public double RoughWeight = 0.5;
         public double DarkWeight = 0.3;
-        public bool EdgeMode; // false = pick up in crevices, true = on edges
+        public int Mode; // 0 = crevices, 1 = edges, 2 = both, 3 = flat areas (inverse of both)
     }
 
     // Derives dirt/mud style masks from normal-map curvature, weighted by roughness and albedo darkness.
@@ -81,7 +81,10 @@ namespace ReforgerTexturePacker
             float[] m = new float[n];
             for (int i = 0; i < n; i++)
             {
-                double raw = s.EdgeMode ? curv[i] : -curv[i];
+                double raw;
+                if (s.Mode == 1) raw = curv[i];
+                else if (s.Mode >= 2) raw = Math.Abs(curv[i]);
+                else raw = -curv[i];
                 m[i] = raw > 0 ? (float)(raw * curvGain / 48.0) : 0f;
             }
             m = BoxBlur(m, w, h, s.Blur);
@@ -91,6 +94,8 @@ namespace ReforgerTexturePacker
             {
                 double v = m[i] * s.Strength;
                 if (v > 1.0) v = 1.0;
+                if (s.Mode == 3)
+                    v = 1.0 - v;
                 if (rough != null && s.RoughWeight > 0)
                     v *= (1.0 - s.RoughWeight) + s.RoughWeight * (rough[i] / 255.0);
                 if (luma != null && s.DarkWeight > 0)

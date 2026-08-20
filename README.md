@@ -27,7 +27,7 @@ No installer — save it anywhere and double-click.
 | `_NMO` | Normal +X | Normal −Y | Metalness | Ambient Occlusion |
 | `_BCA` | Albedo | Albedo | Albedo | Opacity mask |
 | `_VFX` | Dirt mask (generated) | Mud mask (generated) | — | — |
-| `_GLOBAL_MASK` | Mask (generated, grayscale) | — | — | — |
+| `_GLOBAL_MASK` | Material 2 mask | Material 3 mask | Material 4 mask | — |
 
 Files are written as `<BaseName>_BCR.tif`, etc. Workbench assigns the correct import profile
 (compression + color space) automatically from the suffix when you register the texture.
@@ -63,11 +63,16 @@ the maps you already loaded:
 - Optionally weighted by **roughness** (dirt sticks to rough areas) and **albedo darkness**
   from the base color.
 - Per-channel sliders: strength, blur (spread), base level, roughness influence, darkness
-  influence, and a crevices/edges mode. Settings tuned on the preview are automatically
-  rescaled for the full-resolution export.
+  influence, and a pick-up mode: **Crevices** (dirt/grime), **Edges** (wear/scratches),
+  **Both**, or **Flat areas** (the inverse — untouched surfaces). Settings tuned on the
+  preview are automatically rescaled for the full-resolution export.
+- The `_GLOBAL_MASK` layout row maps sources onto the PBRMulti sub-material channels
+  (**black = Material 1, R = Material 2, G = Material 3, B = Material 4**) — each channel
+  can take the dirt mask, mud mask, an inverted copy, solid white, or nothing.
 
 Note: `_GLOBAL_MASK` needs its compression set manually in Workbench import settings
-(`RedHQCompression`) — the wiki chart marks channel masks "must set manually".
+(`RedHQCompression` for an R-only mask, `ColorHQCompression` for an RGB mask) — the wiki
+chart marks channel masks "must set manually".
 
 ## Building from source
 
