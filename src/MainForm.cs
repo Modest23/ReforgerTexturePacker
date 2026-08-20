@@ -231,6 +231,12 @@ namespace ReforgerTexturePacker
             _btnAll.Click += delegate { RunExport(ExportAll); };
             grpOut.Controls.Add(_btnAll);
 
+            Button btnMaskGen = new Button();
+            btnMaskGen.Text = "Mask / VFX…";
+            btnMaskGen.SetBounds(620, 90, 130, 30);
+            btnMaskGen.Click += OnMaskGenClick;
+            grpOut.Controls.Add(btnMaskGen);
+
             txtStatus = new TextBox();
             txtStatus.SetBounds(8, 558, 968, 58);
             txtStatus.Multiline = true;
@@ -456,6 +462,27 @@ namespace ReforgerTexturePacker
             int i = cmb.Items.IndexOf(value);
             if (i >= 0)
                 cmb.SelectedIndex = i;
+        }
+
+        private void OnMaskGenClick(object sender, EventArgs e)
+        {
+            if (!slotNormal.HasImage)
+            {
+                txtStatus.Text = "Load a Normal map first - the Mask / VFX generator derives its masks from it.";
+                return;
+            }
+            MaskGenContext ctx = new MaskGenContext();
+            ctx.NormalPath = slotNormal.ImagePath;
+            ctx.FlipGreen = chkFlipGreen.Checked;
+            ctx.BasePath = slotBase.HasImage ? slotBase.ImagePath : null;
+            ctx.RoughPath = slotRough.HasImage ? slotRough.ImagePath : null;
+            ctx.RoughChannel = (string)cmbRoughCh.SelectedItem;
+            ctx.RoughInvert = chkRoughInvert.Checked;
+            ctx.OutDir = txtOutDir.Text.Trim();
+            string bn = TrimSeps(txtBaseName.Text.Trim());
+            ctx.BaseName = bn.Length > 0 ? bn : "Texture";
+            using (MaskVfxDialog dlg = new MaskVfxDialog(ctx))
+                dlg.ShowDialog(this);
         }
 
         private void OnOutBrowseClick(object sender, EventArgs e)

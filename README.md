@@ -26,6 +26,8 @@ No installer — save it anywhere and double-click.
 | `_BCR` | Albedo | Albedo | Albedo | Roughness |
 | `_NMO` | Normal +X | Normal −Y | Metalness | Ambient Occlusion |
 | `_BCA` | Albedo | Albedo | Albedo | Opacity mask |
+| `_VFX` | Dirt mask (generated) | Mud mask (generated) | — | — |
+| `_GLOBAL_MASK` | Mask (generated, grayscale) | — | — | — |
 
 Files are written as `<BaseName>_BCR.tif`, etc. Workbench assigns the correct import profile
 (compression + color space) automatically from the suffix when you register the texture.
@@ -49,6 +51,23 @@ Files are written as `<BaseName>_BCR.tif`, etc. Workbench assigns the correct im
 
 Reads `.png .tif .tiff .tga .jpg .bmp` sources. Non-power-of-two outputs get a warning.
 Theme (dark/light) is switchable in the header and remembered between runs.
+
+## Mask / VFX generator
+
+The **Mask / VFX…** button (needs a Normal map loaded) opens a live-preview generator that
+*derives* Reforger's `_VFX` dirt (R) + mud (G) masks — or a grayscale `_GLOBAL_MASK` — from
+the maps you already loaded:
+
+- Crevices (or edges) are detected from normal-map curvature — dirt collects where the
+  surface creases, wear happens on raised edges.
+- Optionally weighted by **roughness** (dirt sticks to rough areas) and **albedo darkness**
+  from the base color.
+- Per-channel sliders: strength, blur (spread), base level, roughness influence, darkness
+  influence, and a crevices/edges mode. Settings tuned on the preview are automatically
+  rescaled for the full-resolution export.
+
+Note: `_GLOBAL_MASK` needs its compression set manually in Workbench import settings
+(`RedHQCompression`) — the wiki chart marks channel masks "must set manually".
 
 ## Building from source
 
