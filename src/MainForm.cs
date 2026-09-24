@@ -532,6 +532,7 @@ namespace ReforgerTexturePacker
             if (keyData == (Keys.Control | Keys.S)) { SaveProject(false); return true; }
             if (keyData == (Keys.Control | Keys.Shift | Keys.S)) { SaveProject(true); return true; }
             if (keyData == (Keys.Control | Keys.O)) { OnOpenProjectClick(); return true; }
+            if (keyData == Keys.F12) { SaveScreenshot(); return true; }
             if (keyData == Keys.F11)
             {
                 ToggleFullscreen();
@@ -580,6 +581,12 @@ namespace ReforgerTexturePacker
             info.ForeColor = Theme.SubText;
             info.SetBounds(262, 11, 700, 16);
             bar.Controls.Add(info);
+            Button shot = new Button();
+            shot.Text = "Save image\u2026  (F12)";
+            shot.SetBounds(f.Width - 300, 5, 144, 28);
+            shot.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            shot.Click += delegate { SaveScreenshot(); };
+            bar.Controls.Add(shot);
             Button exit = new Button();
             exit.Text = "Exit full screen";
             exit.SetBounds(f.Width - 150, 5, 138, 28);
@@ -597,7 +604,12 @@ namespace ReforgerTexturePacker
             f.Controls.Add(bar);
             f.KeyDown += delegate(object s, KeyEventArgs e)
             {
-                if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.F11)
+                if (e.KeyCode == Keys.F12)
+                {
+                    e.Handled = true;
+                    SaveScreenshot();
+                }
+                else if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.F11)
                 {
                     e.Handled = true;
                     f.Close();
@@ -645,6 +657,38 @@ namespace ReforgerTexturePacker
             Prefs.Set("split.main", _splitMain.SplitterDistance.ToString());
             Prefs.Set("split.left", _splitLeft.SplitterDistance.ToString());
             Prefs.Set("split.prev", _splitPrev.SplitterDistance.ToString());
+        }
+
+        // Saves the 3D view as a PNG, rendered at twice the on-screen size.
+        private void SaveScreenshot()
+        {
+            if (_mesh == null)
+            {
+                txtStatus.Text = "Load a model first - Save image captures the 3D preview.";
+                return;
+            }
+            Bitmap img = _model3d.RenderImage(Math.Max(64, _model3d.Width * 2), Math.Max(64, _model3d.Height * 2));
+            if (img == null)
+            {
+                txtStatus.Text = "Save image isn't supported by this graphics driver.";
+                return;
+            }
+            using (img)
+            using (SaveFileDialog dlg = new SaveFileDialog())
+            {
+                dlg.Title = "Save 3D preview image";
+                dlg.Filter = "PNG image (*.png)|*.png";
+                dlg.DefaultExt = "png";
+                if (_modelPath != null)
+                {
+                    dlg.InitialDirectory = Path.GetDirectoryName(_modelPath);
+                    dlg.FileName = Path.GetFileNameWithoutExtension(_modelPath) + "_preview.png";
+                }
+                if (dlg.ShowDialog(_fsForm != null ? (IWin32Window)_fsForm : this) != DialogResult.OK)
+                    return;
+                img.Save(dlg.FileName, System.Drawing.Imaging.ImageFormat.Png);
+                txtStatus.Text = string.Format("Saved {0}  ({1}x{2})", dlg.FileName, img.Width, img.Height);
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

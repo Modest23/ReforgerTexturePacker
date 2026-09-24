@@ -1,25 +1,54 @@
-# Reforger Texture Packer
+<h1 align="center">Reforger Texture Packer</h1>
 
-**by Modest23** (ReforgedZ)
+<p align="center">
+  <b>PBR textures → Arma Reforger's <code>_BCR</code> / <code>_NMO</code> / <code>_BCA</code>, with a live 3D material preview</b><br>
+  by <b>Modest23</b> (ReforgedZ)
+</p>
 
-A small Windows desktop tool that packs loose PBR texture maps into **Arma Reforger**'s
-packed texture layouts, saved as **8-bit RGBA TIFF with LZW compression** — the format the
-Enfusion Workbench importer prefers.
+<p align="center">
+  <img src="docs/hero.png" alt="A textured scooter rendered in the tool's 3D preview" width="100%">
+</p>
 
-No install, no runtime downloads — just run `ReforgerTexturePacker.exe`
-(uses .NET Framework 4.8, which ships with Windows 10/11). It also has a live PBR 3D preview of
-your model, per-material texture sets, a Mask / VFX generator and project files — the 3D features
-read `.fbx` / `.blend` / `.obj` through **Blender** (any recent version; found automatically).
+<p align="center">
+  <a href="../../raw/main/ReforgerTexturePacker.exe"><b>⬇ Download ReforgerTexturePacker.exe</b></a> (~220 KB)
+  &nbsp;·&nbsp; no installer · Windows 10/11
+</p>
+
+A single small Windows program that packs loose PBR texture maps into **Arma Reforger**'s packed
+layouts as **8-bit RGBA TIFF with LZW compression** (the format the Enfusion Workbench importer
+prefers), and lets you see the result on your model before you export.
+
+- **Live 3D preview:** your model with the real material on it (roughness, metalness, normal map, AO), shown at the size you'll export.
+- **Whole models at once:** one texture set per material and UDIM tile, auto-filled from your texture folder, exported in one click.
+- **Mask / VFX generator:** `_GLOBAL_MASK` material masks and `_VFX` dirt / mud, optionally baked from the 3D model.
+- **Projects:** save everything to a `.rtp` file and pick up where you left off.
+
+Just run `ReforgerTexturePacker.exe` (it uses .NET Framework 4.8, which ships with Windows).
+The 3D features read `.fbx` / `.blend` / `.obj` through **Blender** (any recent version, found
+automatically); everything else works without it.
+
+## Screenshots
 
 | Dark | Light |
 |------|-------|
-| ![Dark theme](docs/screenshot-dark.png) | ![Light theme](docs/screenshot-light.png) |
+| ![Main window, dark theme](docs/main-dark.png) | ![Main window, light theme](docs/main-light.png) |
 
-## Download
+**See every map on the model** - switch the preview between the full material, clay, base color,
+roughness, metalness, AO and the normal map:
 
-**[Download ReforgerTexturePacker.exe](../../raw/main/ReforgerTexturePacker.exe)** (~220 KB)
+![Clay, base color and roughness views of the model](docs/preview-views.png)
 
-No installer — save it anywhere and double-click.
+**Check the export size before you export** - the preview shows your textures at the size you'll
+export, so you can see what going from 4K down to 2K (or lower) costs on the actual model:
+
+![The same close-up with the source 4096 px textures and exported at 1024 px](docs/preview-resolution.png)
+
+**Mask / VFX generator** - `_VFX` dirt (red) and mud (green) over the texture, and `_GLOBAL_MASK`
+material regions:
+
+| `_VFX` dirt + mud | `_GLOBAL_MASK` materials |
+|------|-------|
+| ![Mask / VFX generator showing dirt and mud](docs/mask-vfx.png) | ![Mask / VFX generator showing material regions](docs/mask-materials.png) |
 
 ## What it outputs
 
@@ -63,7 +92,12 @@ reflections - using the same channels and defaults the export uses. **Show** swi
 material, base color, roughness, metalness, AO, normal map and clay (+ normal detail). Only the faces of this texture
 set's material and UDIM tile are textured - the rest is grey. The model is remembered per
 texture folder and reloads automatically. Drag = rotate, right-drag = pan, wheel = zoom,
-double-click = reset.
+double-click = reset. **Full screen** with F11, and **Save image** (F12) writes a PNG of the view
+at twice its on-screen size. Textures are shown at the export **Max size** (Auto = full source),
+so switching it compares resolutions on the model.
+
+**Projects:** *Save project* / *Open project* (Ctrl+S / Ctrl+O, or drop a `.rtp` on the window)
+store the model, every texture set, channels and export size.
 
 **Multi-material models:** once a model is loaded, the panel lists one *texture set* per material
 (and UDIM tile). Click a set and the slots on the left switch to its textures - edits apply to that

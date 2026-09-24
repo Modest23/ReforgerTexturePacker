@@ -473,12 +473,23 @@ namespace ReforgerTexturePacker
             int cw = Math.Max(1, ClientSize.Width), ch = Math.Max(1, ClientSize.Height);
             bool ss = EnsureFbo(cw * 2, ch * 2);
             if (ss)
-            {
                 GL.BindFramebuffer(0x8D40, _fbo);
-                glViewport(0, 0, cw * 2, ch * 2);
+            DrawScene(ss ? cw * 2 : cw, ss ? ch * 2 : ch);
+            if (ss)
+            {
+                // 2x2 -> 1 with linear filtering = 4 samples per pixel
+                GL.BindFramebuffer(0x8CA8, _fbo);   // READ
+                GL.BindFramebuffer(0x8CA9, 0);      // DRAW
+                GL.BlitFramebuffer(0, 0, cw * 2, ch * 2, 0, 0, cw, ch, 0x4000, 0x2601);
+                GL.BindFramebuffer(0x8D40, 0);
             }
-            else
-                glViewport(0, 0, cw, ch);
+            SwapBuffers(_dc);
+        }
+
+        // Renders the model into the bound framebuffer at w x h.
+        private void DrawScene(int w, int h)
+        {
+            glViewport(0, 0, w, h);
             Color bg = Theme.ThumbBg;
             glClearColor(bg.R / 255f, bg.G / 255f, bg.B / 255f, 1f);
             glClear(0x4000 | 0x100);
@@ -490,7 +501,7 @@ namespace ReforgerTexturePacker
                 double yr = _yaw * Math.PI / 180, pr = _pitch * Math.PI / 180;
                 float dx = (float)(Math.Cos(pr) * Math.Sin(yr)), dy = (float)Math.Sin(pr), dz = (float)(Math.Cos(pr) * Math.Cos(yr));
                 float[] eye = { _target[0] + dx * (float)_dist, _target[1] + dy * (float)_dist, _target[2] + dz * (float)_dist };
-                float aspect = (float)cw / ch;
+                float aspect = (float)w / h;
                 float near = (float)Math.Max(_dist * 0.01, 1e-3), far = (float)(_dist + _radius * 10);
                 float[] mvp = Mul(Perspective(40f, aspect, near, far), LookAt(eye, _target));
                 GL.UniformMatrix4fv(_locMvp, 1, 0, mvp);
@@ -517,15 +528,57 @@ namespace ReforgerTexturePacker
                 }
                 GL.UseProgram(0);
             }
-            if (ss)
+        }
+
+        // Renders the current view offscreen at w x h (supersampled) and returns it - for Save image.
+        // Null when framebuffers aren't available.
+        public Bitmap RenderImage(int w, int h)
+        {
+            if (!_glOk || !_ssaa || w < 1 || h < 1)
+                return null;
+            wglMakeCurrent(_dc, _rc);
+            UploadPending();
+            uint[] fb = new uint[2], rb = new uint[3];
+            GL.GenFramebuffers(2, fb);
+            GL.GenRenderbuffers(3, rb);
+            try
             {
-                // 2x2 -> 1 with linear filtering = 4 samples per pixel
-                GL.BindFramebuffer(0x8CA8, _fbo);   // READ
-                GL.BindFramebuffer(0x8CA9, 0);      // DRAW
-                GL.BlitFramebuffer(0, 0, cw * 2, ch * 2, 0, 0, cw, ch, 0x4000, 0x2601);
-                GL.BindFramebuffer(0x8D40, 0);
+                // big = 2x with depth, small = the output size
+                GL.BindRenderbuffer(0x8D41, rb[0]); GL.RenderbufferStorage(0x8D41, 0x8058, w * 2, h * 2);
+                GL.BindRenderbuffer(0x8D41, rb[1]); GL.RenderbufferStorage(0x8D41, 0x81A6, w * 2, h * 2);
+                GL.BindRenderbuffer(0x8D41, rb[2]); GL.RenderbufferStorage(0x8D41, 0x8058, w, h);
+                GL.BindFramebuffer(0x8D40, fb[0]);
+                GL.FramebufferRenderbuffer(0x8D40, 0x8CE0, 0x8D41, rb[0]);
+                GL.FramebufferRenderbuffer(0x8D40, 0x8D00, 0x8D41, rb[1]);
+                if (GL.CheckFramebufferStatus(0x8D40) != 0x8CD5) return null;
+                DrawScene(w * 2, h * 2);
+                GL.BindFramebuffer(0x8D40, fb[1]);
+                GL.FramebufferRenderbuffer(0x8D40, 0x8CE0, 0x8D41, rb[2]);
+                GL.BindFramebuffer(0x8CA8, fb[0]);
+                GL.BindFramebuffer(0x8CA9, fb[1]);
+                GL.BlitFramebuffer(0, 0, w * 2, h * 2, 0, 0, w, h, 0x4000, 0x2601);
+                GL.BindFramebuffer(0x8CA8, fb[1]);
+                byte[] px = new byte[w * h * 4];
+                glPixelStorei(0x0D05, 1); // PACK_ALIGNMENT
+                glReadPixels(0, 0, w, h, 0x80E1, 0x1401, px);
+                Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+                BitmapData bd = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                for (int y = 0; y < h; y++)
+                {
+                    int src = (h - 1 - y) * w * 4; // GL rows are bottom-up
+                    for (int x = 0; x < w; x++) px[src + x * 4 + 3] = 255;
+                    Marshal.Copy(px, src, new IntPtr(bd.Scan0.ToInt64() + (long)y * bd.Stride), w * 4);
+                }
+                bmp.UnlockBits(bd);
+                return bmp;
             }
-            SwapBuffers(_dc);
+            finally
+            {
+                GL.BindFramebuffer(0x8D40, 0);
+                if (GL.DeleteFramebuffers != null) GL.DeleteFramebuffers(2, fb);
+                if (GL.DeleteRenderbuffers != null) GL.DeleteRenderbuffers(3, rb);
+                Invalidate();
+            }
         }
 
         private void DrawBuffer(uint vbo, int count)
@@ -761,6 +814,7 @@ void main() {
         [DllImport("opengl32.dll")] private static extern void glTexParameteri(uint target, uint pname, int param);
         [DllImport("opengl32.dll")] private static extern void glTexParameterf(uint target, uint pname, float param);
         [DllImport("opengl32.dll")] private static extern void glPixelStorei(uint pname, int param);
+        [DllImport("opengl32.dll")] private static extern void glReadPixels(int x, int y, int w, int h, uint format, uint type, byte[] data);
     }
 
     // OpenGL 2.0+ entry points, fetched from the driver at runtime.
@@ -800,7 +854,7 @@ void main() {
         public static dUniform1f Uniform1f;
         public static dUniform3f Uniform3f;
         public static dUniformMatrix4fv UniformMatrix4fv;
-        public static dGenBuffers GenBuffers, GenFramebuffers, GenRenderbuffers;
+        public static dGenBuffers GenBuffers, GenFramebuffers, GenRenderbuffers, DeleteFramebuffers, DeleteRenderbuffers;
         public static dUintUint BindFramebuffer, BindRenderbuffer;
         public static dRenderbufferStorage RenderbufferStorage;
         public static dFramebufferRenderbuffer FramebufferRenderbuffer;
@@ -847,6 +901,8 @@ void main() {
             GenerateMipmap = F<dUint>("glGenerateMipmap");
             GenFramebuffers = F<dGenBuffers>("glGenFramebuffers");
             GenRenderbuffers = F<dGenBuffers>("glGenRenderbuffers");
+            DeleteFramebuffers = F<dGenBuffers>("glDeleteFramebuffers");
+            DeleteRenderbuffers = F<dGenBuffers>("glDeleteRenderbuffers");
             BindFramebuffer = F<dUintUint>("glBindFramebuffer");
             BindRenderbuffer = F<dUintUint>("glBindRenderbuffer");
             RenderbufferStorage = F<dRenderbufferStorage>("glRenderbufferStorage");
