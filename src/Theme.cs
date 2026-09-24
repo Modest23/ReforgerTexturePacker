@@ -97,7 +97,7 @@ namespace ReforgerTexturePacker
     {
         public DarkGroupBox()
         {
-            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             BackColor = Theme.Bg;
             ForeColor = Theme.Text;
         }

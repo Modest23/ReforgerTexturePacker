@@ -8,6 +8,7 @@ $src = Join-Path $PSScriptRoot "src"
     /out:"$out" `
     /win32manifest:"$src\app.manifest" `
     /win32icon:"$src\app.ico" `
+    "/resource:$src\rz_bake.py,rz_bake.py" `
     /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
     "$src\*.cs"
 

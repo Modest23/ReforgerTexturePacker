@@ -173,14 +173,32 @@ namespace ReforgerTexturePacker
             }
         }
 
+        // Thumbnails by path + modification time - switching texture sets would otherwise re-decode 4K images.
+        private static System.Collections.Generic.Dictionary<string, Bitmap> _thumbCache = new System.Collections.Generic.Dictionary<string, Bitmap>();
+        private static System.Collections.Generic.Dictionary<string, Size> _sizeCache = new System.Collections.Generic.Dictionary<string, Size>();
+
         public void LoadImage(string path)
         {
             try
             {
-                Bitmap full = Packer.LoadBitmap(path);
-                _imageSize = full.Size;
-                Bitmap thumb = MakeThumb(full, 80);
-                full.Dispose();
+                string key = path.ToLowerInvariant() + "|" + File.GetLastWriteTimeUtc(path).Ticks;
+                Bitmap cached;
+                Bitmap thumb;
+                if (_thumbCache.TryGetValue(key, out cached))
+                {
+                    thumb = new Bitmap(cached);
+                    _imageSize = _sizeCache[key];
+                }
+                else
+                {
+                    Bitmap full = Packer.LoadBitmap(path);
+                    _imageSize = full.Size;
+                    thumb = MakeThumb(full, 80);
+                    full.Dispose();
+                    if (_thumbCache.Count > 200) { _thumbCache.Clear(); _sizeCache.Clear(); }
+                    _thumbCache[key] = new Bitmap(thumb);
+                    _sizeCache[key] = _imageSize;
+                }
 
                 if (_thumb.Image != null)
                     _thumb.Image.Dispose();

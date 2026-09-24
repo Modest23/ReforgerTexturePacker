@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows.Forms;
 
 namespace ReforgerTexturePacker
@@ -20,6 +21,30 @@ namespace ReforgerTexturePacker
         private ComboBox _cmbTheme;
         private Button _btnAll;
         private string _startFile;
+        private ModelPreview _model3d;
+        private ComboBox _cmbShow;
+        private Label _lblModel;
+        private Button _btnModel;
+        private ModelMesh _mesh;
+        private string _modelPath;
+        private bool _modelLoading;
+        private Timer _texTimer = new Timer();
+        private ListBox _lstSets;
+        private Button _btnMatch, _btnExportSets;
+        private List<MaterialSet> _sets;
+        private MaterialSet _cur;
+        private bool _switching;
+        private int _mapLoads;
+        private Dictionary<string, int> _setJobs = new Dictionary<string, int>();
+        private ToolTip _tip3d = new ToolTip();
+        private Form _fsForm;
+        private SplitContainer _splitMain, _splitLeft, _splitPrev;
+        private ComboBox _cmbSetsSize;
+        private string _projectPath;
+        private string[] _pendingProject;
+        private Control _fsPrevParent;
+        private Rectangle _fsPrevBounds;
+        private DockStyle _fsPrevDock;
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
@@ -34,8 +59,8 @@ namespace ReforgerTexturePacker
             AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Segoe UI", 9F);
             ClientSize = new Size(984, 624);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = true;
             StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
             catch (Exception) { }
@@ -84,6 +109,20 @@ namespace ReforgerTexturePacker
             _cmbTheme.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             _cmbTheme.SelectedIndexChanged += OnThemeChanged;
             _header.Controls.Add(_cmbTheme);
+
+            Button btnOpenProj = new Button();
+            btnOpenProj.Text = "Open project\u2026";
+            btnOpenProj.SetBounds(590, 9, 104, 26);
+            btnOpenProj.Click += delegate { OnOpenProjectClick(); };
+            _header.Controls.Add(btnOpenProj);
+            Button btnSaveProj = new Button();
+            btnSaveProj.Text = "Save project";
+            btnSaveProj.SetBounds(698, 9, 96, 26);
+            btnSaveProj.Click += delegate { SaveProject(false); };
+            _header.Controls.Add(btnSaveProj);
+            ToolTip ttp = new ToolTip();
+            ttp.SetToolTip(btnOpenProj, "Open a saved .rtp project (Ctrl+O). You can also drop a .rtp on the window.");
+            ttp.SetToolTip(btnSaveProj, "Save everything - model, every texture set, channels, export size - to a .rtp file (Ctrl+S, Ctrl+Shift+S = save as).");
 
             Button btnAutoFill = new Button();
             btnAutoFill.Text = "Auto-Fill Set…";
@@ -202,7 +241,8 @@ namespace ReforgerTexturePacker
             cmbMaxSize = new ComboBox();
             cmbMaxSize.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbMaxSize.Items.AddRange(new object[] { "Auto", "8192", "4096", "2048", "1024", "512", "256" });
-            cmbMaxSize.SelectedIndex = 0;
+            cmbMaxSize.SelectedItem = Prefs.Get("maxsize", "2048");
+            if (cmbMaxSize.SelectedIndex < 0) cmbMaxSize.SelectedIndex = 0;
             cmbMaxSize.SetBounds(424, 55, 90, 23);
             grpOut.Controls.Add(cmbMaxSize);
 
@@ -245,10 +285,170 @@ namespace ReforgerTexturePacker
             txtStatus.Text = "Ready. Load a PBR set (Auto-Fill or drag & drop), then Export. Output = 8-bit RGBA TIFF with LZW compression.";
             Controls.Add(txtStatus);
 
+            // ---- 3D preview ------------------------------------------------------
+            const int extra = 416;
+            ClientSize = new Size(984 + extra, 624);
+            _header.Width = 984 + extra;
+            DarkGroupBox grpPrev = new DarkGroupBox();
+            grpPrev.Text = "3D preview";
+            grpPrev.SetBounds(984, 86, 408, 530);
+            // resizing / maximizing the window gives the extra room to the 3D preview
+            grpPrev.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            Controls.Add(grpPrev);
+            // texture-set list above, 3D view below - drag the bar between them
+            _splitPrev = new SplitContainer();
+            _splitPrev.Orientation = Orientation.Horizontal;
+            _splitPrev.SetBounds(8, 20, 392, 414);
+            _splitPrev.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            _splitPrev.SplitterWidth = 6;
+            _splitPrev.FixedPanel = FixedPanel.Panel1; // the list keeps its height, the 3D view takes any growth
+            grpPrev.Controls.Add(_splitPrev);
+            _splitPrev.Panel1MinSize = 40;
+            _splitPrev.Panel2MinSize = 100;
+            _splitPrev.SplitterDistance = 104;
+            Label lsets = new Label();
+            lsets.Text = "Texture sets on this model - click one to edit it:";
+            lsets.Dock = DockStyle.Top;
+            lsets.Height = 18;
+            _lstSets = new ListBox();
+            _lstSets.Dock = DockStyle.Fill;
+            _lstSets.IntegralHeight = false;
+            _lstSets.BorderStyle = BorderStyle.FixedSingle;
+            _lstSets.SelectedIndexChanged += delegate { OnSetSelected(); };
+            _splitPrev.Panel1.Controls.Add(_lstSets);   // Fill first, then the docked label
+            _splitPrev.Panel1.Controls.Add(lsets);
+            _model3d = new ModelPreview();
+            _model3d.Dock = DockStyle.Fill;
+            _splitPrev.Panel2.Controls.Add(_model3d);
+            _tip3d.SetToolTip(_model3d, "Drag = rotate   right-drag = pan   wheel = zoom   double-click = reset");
+            _btnModel = new Button();
+            _btnModel.Text = "Load model\u2026";
+            _btnModel.SetBounds(8, 440, 96, 28);
+            _btnModel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _btnModel.Click += OnLoadModelClick;
+            grpPrev.Controls.Add(_btnModel);
+            _btnMatch = new Button();
+            _btnMatch.Text = "Match textures";
+            _btnMatch.SetBounds(108, 440, 104, 28);
+            _btnMatch.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _btnMatch.Click += OnMatchClick;
+            grpPrev.Controls.Add(_btnMatch);
+            _tip3d.SetToolTip(_btnMatch, "Fills every set that has no textures from the texture folder - by material name and UDIM tile.");
+            _btnExportSets = new Button();
+            _btnExportSets.Text = "Export all sets";
+            _btnExportSets.SetBounds(216, 440, 116, 28);
+            _btnExportSets.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _btnExportSets.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            _btnExportSets.Enabled = false;
+            _btnExportSets.Click += OnExportSetsClick;
+            grpPrev.Controls.Add(_btnExportSets);
+            _tip3d.SetToolTip(_btnExportSets, "Exports _BCR / _NMO (/ _BCA) for every texture set that has textures, each to its own output folder + base name, at the size on the right.");
+            _cmbSetsSize = new ComboBox();
+            _cmbSetsSize.DropDownStyle = ComboBoxStyle.DropDownList;
+            foreach (object o in cmbMaxSize.Items) _cmbSetsSize.Items.Add(o);
+            _cmbSetsSize.SelectedItem = cmbMaxSize.SelectedItem;
+            _cmbSetsSize.SetBounds(336, 443, 64, 23);
+            _cmbSetsSize.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            grpPrev.Controls.Add(_cmbSetsSize);
+            _tip3d.SetToolTip(_cmbSetsSize, "Max export size (same as Max size in the Export box). Auto = keep the source size.\n" +
+                "The 3D preview shows the textures at this size too - switch between Auto and 2048 to compare.");
+            // one setting, two places: keep both boxes in step and remember it
+            _cmbSetsSize.SelectedIndexChanged += delegate
+            {
+                if (!Equals(cmbMaxSize.SelectedItem, _cmbSetsSize.SelectedItem)) cmbMaxSize.SelectedItem = _cmbSetsSize.SelectedItem;
+            };
+            cmbMaxSize.SelectedIndexChanged += delegate
+            {
+                if (!Equals(_cmbSetsSize.SelectedItem, cmbMaxSize.SelectedItem)) _cmbSetsSize.SelectedItem = cmbMaxSize.SelectedItem;
+                Prefs.Set("maxsize", (string)cmbMaxSize.SelectedItem);
+                // the preview follows the export size, so flipping it compares 4K vs 2K on the model
+                if (_mesh != null && _sets != null)
+                {
+                    LoadAllSetMaps();
+                    txtStatus.Text = "3D preview now shows the textures at " + ((string)cmbMaxSize.SelectedItem == "Auto" ? "their full source size" : cmbMaxSize.SelectedItem + " px") +
+                        " - exactly what Export writes. Zoom in (wheel) or go full screen (F11) to judge the detail.";
+                }
+            };
+            Label lshow = new Label();
+            lshow.Text = "Show:";
+            lshow.SetBounds(8, 480, 40, 16);
+            lshow.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            grpPrev.Controls.Add(lshow);
+            _cmbShow = new ComboBox();
+            _cmbShow.DropDownStyle = ComboBoxStyle.DropDownList;
+            // order matches ModelPreview.Mode* constants
+            _cmbShow.Items.AddRange(new object[] { "Full material (PBR)", "Base color only", "Roughness", "Metalness", "Ambient occlusion", "Normal map", "Clay + normal detail" });
+            _cmbShow.SelectedIndex = 0;
+            _cmbShow.SetBounds(50, 476, 174, 23);
+            _cmbShow.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            _cmbShow.SelectedIndexChanged += delegate { _model3d.SetMode(_cmbShow.SelectedIndex); };
+            grpPrev.Controls.Add(_cmbShow);
+            Button btnFull = new Button();
+            btnFull.Text = "Full screen  (F11)";
+            btnFull.SetBounds(232, 474, 168, 27);
+            btnFull.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            btnFull.Click += delegate { ToggleFullscreen(); };
+            grpPrev.Controls.Add(btnFull);
+            _lblModel = new Label();
+            _lblModel.SetBounds(8, 506, 392, 16);
+            _lblModel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            _lblModel.AutoEllipsis = true;
+            _lblModel.Text = "Load the .fbx / .blend / .obj these textures are for (uses Blender).";
+            grpPrev.Controls.Add(_lblModel);
+            _header.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            txtStatus.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
+            _model3d.MapsLost += delegate { LoadAllSetMaps(); };
+            _texTimer.Interval = 150;
+            _texTimer.Tick += delegate { _texTimer.Stop(); RefreshPreviewTexture(); };
+
             slotBase.SlotChanged += OnPrimarySlotChanged;
             slotNormal.SlotChanged += OnPrimarySlotChanged;
+            foreach (TextureSlot sl in new TextureSlot[] { slotBase, slotRough, slotNormal, slotMetal, slotAo })
+                sl.SlotChanged += delegate { OnTexturesChanged(); };
+            slotOpacity.SlotChanged += delegate { OnSetEdited(); };
+            foreach (ComboBox cb in new ComboBox[] { cmbRoughCh, cmbMetalCh, cmbAoCh, cmbOpacityCh })
+                cb.SelectedIndexChanged += delegate { OnSetEdited(); };
+            chkRoughInvert.CheckedChanged += delegate { OnSetEdited(); };
+            chkFlipGreen.CheckedChanged += delegate { OnSetEdited(); };
+            foreach (NumericUpDown nd in new NumericUpDown[] { numRoughDef, numMetalDef, numAoDef })
+                nd.ValueChanged += delegate { OnSetEdited(); };
+
+            _splitMain = new SplitContainer();
+            _splitMain.Orientation = Orientation.Vertical;
+            _splitMain.SetBounds(0, 44, ClientSize.Width, ClientSize.Height - 44);
+            _splitMain.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            _splitMain.SplitterWidth = 6;
+            _splitMain.FixedPanel = FixedPanel.Panel1; // a bigger window grows the preview side
+            Controls.Add(_splitMain);
+            _splitMain.Panel1MinSize = 480;
+            _splitMain.Panel2MinSize = 300;
+            _splitMain.SplitterDistance = 980;
+            _splitLeft = new SplitContainer();
+            _splitLeft.Orientation = Orientation.Horizontal;
+            _splitLeft.Dock = DockStyle.Fill;
+            _splitLeft.SplitterWidth = 6;
+            _splitLeft.FixedPanel = FixedPanel.Panel1;
+            _splitMain.Panel1.Controls.Add(_splitLeft);
+            _splitLeft.Panel1MinSize = 120;
+            _splitLeft.Panel2MinSize = 36;
+            _splitLeft.SplitterDistance = 508;
+            _splitLeft.Panel1.AutoScroll = true;
+            foreach (Control c in new Control[] { btnAutoFill, _hint, grpBcr, grpNmo, grpOut })
+                MoveInto(c, _splitLeft.Panel1, 0, -44);
+            Controls.Remove(txtStatus);
+            txtStatus.Anchor = AnchorStyles.None;
+            txtStatus.Dock = DockStyle.Fill;
+            _splitLeft.Panel2.Padding = new Padding(8, 0, 0, 8);
+            _splitLeft.Panel2.Controls.Add(txtStatus);
+            Controls.Remove(grpPrev);
+            grpPrev.Anchor = AnchorStyles.None;
+            grpPrev.Dock = DockStyle.Fill;
+            _splitMain.Panel2.Padding = new Padding(0, 42, 8, 8);
+            _splitMain.Panel2.Controls.Add(grpPrev);
+            RestoreSplits();
 
             WireDnd(this);
+            WireDnd(_splitLeft.Panel1);
             WireDnd(_header);
             WireDnd(grpBcr);
             WireDnd(grpNmo);
@@ -256,6 +456,7 @@ namespace ReforgerTexturePacker
             WireDnd(_hint);
 
             ReapplyTheme();
+            MinimumSize = Size; // can grow (or maximize), never shrink below the designed layout
         }
 
         private void OnThemeChanged(object sender, EventArgs e)
@@ -290,6 +491,23 @@ namespace ReforgerTexturePacker
             slotNormal.ApplyTheme();
             slotMetal.ApplyTheme();
             slotAo.ApplyTheme();
+            if (_model3d != null)
+            {
+                _model3d.ApplyTheme();
+                _lblModel.ForeColor = Theme.SubText;
+                _lstSets.BackColor = Theme.Field;
+                foreach (SplitContainer sc in new SplitContainer[] { _splitMain, _splitLeft, _splitPrev })
+                {
+                    if (sc == null) continue;
+                    sc.BackColor = Theme.Border;          // the draggable bar
+                    sc.Panel1.BackColor = Theme.Bg;
+                    sc.Panel2.BackColor = Theme.Bg;
+                }
+                _lstSets.ForeColor = Theme.Text;
+                _btnExportSets.BackColor = Theme.Accent;
+                _btnExportSets.ForeColor = Color.White;
+                _btnExportSets.FlatAppearance.BorderColor = Theme.Accent;
+            }
             ApplyTitleBarTheme();
             Invalidate(true);
         }
@@ -309,11 +527,142 @@ namespace ReforgerTexturePacker
             ApplyTitleBarTheme();
         }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.S)) { SaveProject(false); return true; }
+            if (keyData == (Keys.Control | Keys.Shift | Keys.S)) { SaveProject(true); return true; }
+            if (keyData == (Keys.Control | Keys.O)) { OnOpenProjectClick(); return true; }
+            if (keyData == Keys.F11)
+            {
+                ToggleFullscreen();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        // Moves the 3D view into a borderless window covering this monitor; Esc / F11 / the button put it back.
+        private void ToggleFullscreen()
+        {
+            if (_fsForm != null)
+            {
+                _fsForm.Close();
+                return;
+            }
+            Form f = new Form();
+            f.Text = "3D preview";
+            f.FormBorderStyle = FormBorderStyle.None;
+            f.StartPosition = FormStartPosition.Manual;
+            f.Bounds = Screen.FromControl(this).Bounds;
+            f.BackColor = Theme.ThumbBg;
+            f.ForeColor = Theme.Text;
+            f.Font = Font;
+            f.KeyPreview = true;
+            f.ShowInTaskbar = false;
+            f.Icon = Icon;
+
+            Panel bar = new Panel();
+            bar.Dock = DockStyle.Top;
+            bar.Height = 38;
+            bar.BackColor = Theme.HeaderBg;
+            Label ls = new Label();
+            ls.Text = "Show:";
+            ls.SetBounds(12, 11, 40, 16);
+            bar.Controls.Add(ls);
+            ComboBox show = new ComboBox();
+            show.DropDownStyle = ComboBoxStyle.DropDownList;
+            foreach (object o in _cmbShow.Items) show.Items.Add(o);
+            show.SelectedIndex = _cmbShow.SelectedIndex;
+            show.SetBounds(54, 7, 190, 23);
+            show.SelectedIndexChanged += delegate { _cmbShow.SelectedIndex = show.SelectedIndex; };
+            bar.Controls.Add(show);
+            Label info = new Label();
+            info.Text = "Drag = rotate    right-drag = pan    wheel = zoom    double-click = reset view    Esc / F11 = exit";
+            info.ForeColor = Theme.SubText;
+            info.SetBounds(262, 11, 700, 16);
+            bar.Controls.Add(info);
+            Button exit = new Button();
+            exit.Text = "Exit full screen";
+            exit.SetBounds(f.Width - 150, 5, 138, 28);
+            exit.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            exit.Click += delegate { f.Close(); };
+            bar.Controls.Add(exit);
+            Theme.Apply(bar);
+
+            _fsPrevParent = _model3d.Parent;
+            _fsPrevBounds = _model3d.Bounds;
+            _fsPrevDock = _model3d.Dock;
+            _fsPrevParent.Controls.Remove(_model3d);
+            _model3d.Dock = DockStyle.Fill;
+            f.Controls.Add(_model3d);   // the Fill control goes in first, the docked bar after it
+            f.Controls.Add(bar);
+            f.KeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Escape || e.KeyCode == Keys.F11)
+                {
+                    e.Handled = true;
+                    f.Close();
+                }
+            };
+            f.FormClosed += delegate
+            {
+                f.Controls.Remove(_model3d);
+                _fsPrevParent.Controls.Add(_model3d);
+                _model3d.Dock = _fsPrevDock;
+                if (_fsPrevDock == DockStyle.None) _model3d.Bounds = _fsPrevBounds;
+                _model3d.Invalidate();
+                _fsForm = null;
+                Activate();
+            };
+            _fsForm = f;
+            f.Show(this);
+            _model3d.Focus();
+        }
+
+        private static void MoveInto(Control c, Control parent, int dx, int dy)
+        {
+            Rectangle b = c.Bounds;
+            b.Offset(dx, dy);
+            c.Parent.Controls.Remove(c);
+            parent.Controls.Add(c);
+            c.Bounds = b;
+        }
+
+        private void RestoreSplits()
+        {
+            int v;
+            try
+            {
+                if (int.TryParse(Prefs.Get("split.main", ""), out v)) _splitMain.SplitterDistance = v;
+                if (int.TryParse(Prefs.Get("split.left", ""), out v)) _splitLeft.SplitterDistance = v;
+                if (int.TryParse(Prefs.Get("split.prev", ""), out v)) _splitPrev.SplitterDistance = v;
+            }
+            catch (Exception) { } // out of range for the current window size - keep the defaults
+        }
+
+        private void SaveSplits()
+        {
+            if (WindowState == FormWindowState.Minimized) return;
+            Prefs.Set("split.main", _splitMain.SplitterDistance.ToString());
+            Prefs.Set("split.left", _splitLeft.SplitterDistance.ToString());
+            Prefs.Set("split.prev", _splitPrev.SplitterDistance.ToString());
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            SaveSplits();
+            if (_cur != null) SaveUiToSet(_cur);
+            SaveSets();
+            base.OnFormClosing(e);
+        }
+
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
             if (!string.IsNullOrEmpty(_startFile) && File.Exists(_startFile))
-                AutoFillFrom(_startFile);
+            {
+                if (Path.GetExtension(_startFile).Equals(".rtp", StringComparison.OrdinalIgnoreCase)) OpenProject(_startFile);
+                else AutoFillFrom(_startFile);
+            }
         }
 
         // ---- small control factories --------------------------------------------
@@ -372,7 +721,10 @@ namespace ReforgerTexturePacker
             {
                 string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
                 if (files != null && files.Length > 0)
-                    AutoFillFrom(files[0]);
+                {
+                    if (Path.GetExtension(files[0]).Equals(".rtp", StringComparison.OrdinalIgnoreCase)) OpenProject(files[0]);
+                    else AutoFillFrom(files[0]);
+                }
             };
         }
 
@@ -478,23 +830,667 @@ namespace ReforgerTexturePacker
             ctx.RoughPath = slotRough.HasImage ? slotRough.ImagePath : null;
             ctx.RoughChannel = (string)cmbRoughCh.SelectedItem;
             ctx.RoughInvert = chkRoughInvert.Checked;
+            ctx.MetalPath = slotMetal.HasImage ? slotMetal.ImagePath : null;
+            ctx.MetalChannel = (string)cmbMetalCh.SelectedItem;
+            ctx.AoPath = slotAo.HasImage ? slotAo.ImagePath : null;
+            ctx.AoChannel = (string)cmbAoCh.SelectedItem;
             ctx.OutDir = txtOutDir.Text.Trim();
+            ctx.ModelPath = _modelPath;
             string bn = TrimSeps(txtBaseName.Text.Trim());
             ctx.BaseName = bn.Length > 0 ? bn : "Texture";
             using (MaskVfxDialog dlg = new MaskVfxDialog(ctx))
                 dlg.ShowDialog(this);
         }
 
+        // ---- 3D preview + per-material texture sets -----------------------------------------
+
+        private string PreviewTexturePath()
+        {
+            if (slotBase.HasImage) return slotBase.ImagePath;
+            if (slotNormal.HasImage) return slotNormal.ImagePath;
+            return null;
+        }
+
+        private void OnTexturesChanged()
+        {
+            if (_switching)
+                return;
+            // first texture of a set: bring back the model used with this folder last time
+            string tex = PreviewTexturePath();
+            if (_mesh == null && !_modelLoading && tex != null)
+            {
+                string remembered = BlenderBaker.RememberedModel(Path.GetDirectoryName(tex));
+                if (remembered != null)
+                    LoadModel(remembered);
+            }
+            OnSetEdited();
+        }
+
+        // Any edit in the slots: keep it in the current set and refresh that set on the model.
+        private void OnSetEdited()
+        {
+            if (_switching)
+                return;
+            CheckChannels();
+            if (_cur == null)
+                return;
+            SaveUiToSet(_cur);
+            RefreshSetRow(_cur);
+            QueuePreviewTexture();
+        }
+
+        // The classic ORM mistake: two of AO / rough / metal reading the same channel of the same file.
+        private void CheckChannels()
+        {
+            string[] names = { "AO", "Roughness", "Metalness" };
+            TextureSlot[] slots = { slotAo, slotRough, slotMetal };
+            ComboBox[] chs = { cmbAoCh, cmbRoughCh, cmbMetalCh };
+            for (int i = 0; i < 3; i++)
+                for (int j = i + 1; j < 3; j++)
+                    if (slots[i].HasImage && slots[j].HasImage && string.Equals(slots[i].ImagePath, slots[j].ImagePath, StringComparison.OrdinalIgnoreCase)
+                        && (string)chs[i].SelectedItem == (string)chs[j].SelectedItem)
+                    {
+                        txtStatus.Text = string.Format("Check the channels: {0} and {1} both read channel {2} of the same file. " +
+                            "For an ORM / packed map use AO = R, Roughness = G, Metalness = B.", names[i], names[j], chs[i].SelectedItem);
+                        return;
+                    }
+        }
+
+        private void SaveUiToSet(MaterialSet s)
+        {
+            if (s == null) return;
+            s.Base = slotBase.HasImage ? slotBase.ImagePath : "";
+            s.Rough = slotRough.HasImage ? slotRough.ImagePath : "";
+            s.Opacity = slotOpacity.HasImage ? slotOpacity.ImagePath : "";
+            s.Normal = slotNormal.HasImage ? slotNormal.ImagePath : "";
+            s.Metal = slotMetal.HasImage ? slotMetal.ImagePath : "";
+            s.Ao = slotAo.HasImage ? slotAo.ImagePath : "";
+            s.RoughCh = (string)cmbRoughCh.SelectedItem;
+            s.MetalCh = (string)cmbMetalCh.SelectedItem;
+            s.AoCh = (string)cmbAoCh.SelectedItem;
+            s.OpacityCh = (string)cmbOpacityCh.SelectedItem;
+            s.RoughInvert = chkRoughInvert.Checked;
+            s.FlipGreen = chkFlipGreen.Checked;
+            s.RoughDef = (double)numRoughDef.Value;
+            s.MetalDef = (double)numMetalDef.Value;
+            s.AoDef = (double)numAoDef.Value;
+            s.OutDir = txtOutDir.Text.Trim();
+            s.BaseName = txtBaseName.Text.Trim();
+        }
+
+        private void LoadSetToUi(MaterialSet s)
+        {
+            _switching = true;
+            try
+            {
+                SetSlot(slotBase, s.Base);
+                SetSlot(slotRough, s.Rough);
+                SetSlot(slotOpacity, s.Opacity);
+                SetSlot(slotNormal, s.Normal);
+                SetSlot(slotMetal, s.Metal);
+                SetSlot(slotAo, s.Ao);
+                SelectItem(cmbRoughCh, s.RoughCh);
+                SelectItem(cmbMetalCh, s.MetalCh);
+                SelectItem(cmbAoCh, s.AoCh);
+                SelectItem(cmbOpacityCh, s.OpacityCh);
+                chkRoughInvert.Checked = s.RoughInvert;
+                chkFlipGreen.Checked = s.FlipGreen;
+                numRoughDef.Value = (decimal)Math.Max(0, Math.Min(1, s.RoughDef));
+                numMetalDef.Value = (decimal)Math.Max(0, Math.Min(1, s.MetalDef));
+                numAoDef.Value = (decimal)Math.Max(0, Math.Min(1, s.AoDef));
+                // a set without its own output settings exports next to its textures
+                string tex = s.Base.Length > 0 ? s.Base : s.Normal;
+                txtOutDir.Text = s.OutDir.Length > 0 ? s.OutDir : (tex.Length > 0 ? Path.GetDirectoryName(tex) : txtOutDir.Text);
+                txtBaseName.Text = s.BaseName.Length > 0 ? s.BaseName : (tex.Length > 0 ? TrimSeps(TextureSetMatcher.DeriveBaseName(tex)) : "");
+            }
+            finally
+            {
+                _switching = false;
+            }
+            CheckChannels();
+        }
+
+        private static void SetSlot(TextureSlot slot, string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                if (slot.HasImage) slot.ClearImage();
+            }
+            else if (!string.Equals(slot.ImagePath, path, StringComparison.OrdinalIgnoreCase))
+                slot.LoadImage(path);
+        }
+
+        private void OnLoadModelClick(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dlg = new OpenFileDialog())
+            {
+                dlg.Title = "Pick the 3D model these textures belong to";
+                dlg.Filter = "3D models|*.fbx;*.blend;*.obj|All files|*.*";
+                string tex = PreviewTexturePath();
+                if (!string.IsNullOrEmpty(_modelPath) && File.Exists(_modelPath))
+                {
+                    dlg.InitialDirectory = Path.GetDirectoryName(_modelPath);
+                    dlg.FileName = Path.GetFileName(_modelPath);
+                }
+                else if (tex != null)
+                {
+                    DirectoryInfo up = Directory.GetParent(Path.GetDirectoryName(tex));
+                    dlg.InitialDirectory = up != null ? up.FullName : Path.GetDirectoryName(tex);
+                }
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                    LoadModel(dlg.FileName);
+            }
+        }
+
+        private void LoadModel(string model)
+        {
+            string blender = BlenderBaker.FindBlender();
+            if (blender == null)
+            {
+                using (OpenFileDialog dlg = new OpenFileDialog())
+                {
+                    dlg.Title = "Blender wasn't found - where is blender.exe?";
+                    dlg.Filter = "blender.exe|blender.exe|Programs|*.exe";
+                    if (dlg.ShowDialog(this) != DialogResult.OK)
+                        return;
+                    blender = dlg.FileName;
+                }
+                BlenderBaker.RememberBlender(blender);
+            }
+            // keep the edits of the model we're leaving
+            if (_cur != null && _modelPath != null)
+            {
+                SaveUiToSet(_cur);
+                MaterialSets.Save(_modelPath, _sets, _cur);
+            }
+            _modelLoading = true;
+            _btnModel.Enabled = false;
+            _lblModel.Text = "Loading " + Path.GetFileName(model) + " in Blender...";
+            _model3d.SetHint("Loading model...");
+            System.Threading.Thread t = new System.Threading.Thread(delegate()
+            {
+                ModelMesh mesh = null;
+                string err = null;
+                try { mesh = BlenderBaker.LoadMesh(blender, model); }
+                catch (Exception ex) { err = ex.Message; }
+                BeginInvoke((Action)delegate
+                {
+                    _modelLoading = false;
+                    _btnModel.Enabled = true;
+                    if (mesh == null)
+                    {
+                        _lblModel.Text = "Could not load the model - see the status box.";
+                        _model3d.SetHint(_mesh == null ? "No model loaded" : null);
+                        txtStatus.Text = "3D preview: " + err;
+                        return;
+                    }
+                    _mesh = mesh;
+                    _modelPath = model;
+                    string tex = PreviewTexturePath();
+                    if (tex != null)
+                        BlenderBaker.RememberModel(Path.GetDirectoryName(tex), model);
+                    _model3d.SetMesh(mesh);
+                    BuildSets();
+                });
+            });
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        // One texture set per material (and UDIM tile) of the model: restore what was saved, put what's in
+        // the slots into the set it belongs to, and fill the rest from the texture folder by material name.
+        private void BuildSets()
+        {
+            List<MaterialSet> sets = MaterialSets.FromMesh(_mesh);
+            string savedCur = MaterialSets.Restore(_modelPath, sets);
+            string[] project = _pendingProject;
+            _pendingProject = null;
+            if (project != null)
+                savedCur = MaterialSets.RestoreLines(project, sets) ?? savedCur;
+            MaterialSet cur = null;
+            bool fromUi = false;
+            string tex = project != null ? null : PreviewTexturePath();
+            if (tex != null)
+            {
+                int tile = BlenderBaker.TileFromName(tex);
+                List<string> guess = BlenderBaker.GuessMaterials(_mesh, tile, Path.GetFileName(tex));
+                foreach (MaterialSet s in sets)
+                    if (s.Tile == tile && guess.Contains(s.Material)) { cur = s; break; }
+                if (cur != null)
+                {
+                    SaveUiToSet(cur);
+                    fromUi = true;
+                }
+            }
+            if (cur == null && savedCur != null)
+                cur = sets.Find(delegate(MaterialSet s) { return s.Key == savedCur; });
+            if (cur == null)
+                cur = sets.Find(delegate(MaterialSet s) { return s.HasTextures; }) ?? (sets.Count > 0 ? sets[0] : null);
+            _sets = sets;
+            _cur = cur;
+
+            string folder = tex != null ? Path.GetDirectoryName(tex) : FirstTextureFolder();
+            int filled = project != null ? 0 : MaterialSets.AutoMatch(_sets, folder);
+            RebuildSetList();
+            if (_cur != null && !fromUi)
+                LoadSetToUi(_cur);
+            LoadAllSetMaps();
+            SaveSets();
+            int withTex = _sets.FindAll(delegate(MaterialSet s) { return s.HasTextures; }).Count;
+            _lblModel.Text = string.Format("{0}  -  {1:N0} tris, {2} texture sets ({3} with textures)", Path.GetFileName(_modelPath), _mesh.TriCount, _sets.Count, withTex);
+            if (project != null)
+            {
+                txtStatus.Text = string.Format("Opened project {0}: {1} texture sets, {2} with textures.", Path.GetFileName(_projectPath ?? ""), _sets.Count, withTex);
+                return;
+            }
+            txtStatus.Text = string.Format("Model loaded: {0} texture sets (one per material{1}). {2}Click a set on the right to edit its textures; Export all sets writes every set that has textures.",
+                _sets.Count, _sets.Exists(delegate(MaterialSet s) { return s.Tile != 1001; }) ? " and UDIM tile" : "",
+                filled > 0 ? filled + " matched automatically from the texture folder by material name. " : "");
+        }
+
+        private string FirstTextureFolder()
+        {
+            if (_sets != null)
+                foreach (MaterialSet s in _sets)
+                    if (s.HasTextures) return Path.GetDirectoryName(s.Base.Length > 0 ? s.Base : s.Normal);
+            return null;
+        }
+
+        private void RebuildSetList()
+        {
+            _switching = true;
+            try
+            {
+                _lstSets.BeginUpdate();
+                _lstSets.Items.Clear();
+                if (_sets != null)
+                    foreach (MaterialSet s in _sets)
+                        _lstSets.Items.Add(s);
+                _lstSets.SelectedItem = _cur;
+                _lstSets.EndUpdate();
+            }
+            finally
+            {
+                _switching = false;
+            }
+            _btnExportSets.Enabled = _sets != null && _sets.Count > 0;
+        }
+
+        private void RefreshSetRow(MaterialSet s)
+        {
+            int i = _lstSets.Items.IndexOf(s);
+            if (i < 0) return;
+            _switching = true;
+            try
+            {
+                _lstSets.Items[i] = s; // re-evaluates ToString (and can drop the selection)
+                _lstSets.SelectedIndex = _cur != null ? _lstSets.Items.IndexOf(_cur) : -1;
+            }
+            finally
+            {
+                _switching = false;
+            }
+        }
+
+        private void OnSetSelected()
+        {
+            if (_switching)
+                return;
+            MaterialSet s = _lstSets.SelectedItem as MaterialSet;
+            if (s == null || s == _cur)
+                return;
+            MaterialSet prev = _cur;
+            SaveUiToSet(prev);
+            _cur = s;
+            if (prev != null) RefreshSetRow(prev);
+            Cursor = Cursors.WaitCursor;
+            try { LoadSetToUi(s); }
+            finally { Cursor = Cursors.Default; }
+            SaveSets();
+            txtStatus.Text = s.HasTextures
+                ? "Editing " + s.Material + (s.Tile != 1001 ? " (tile " + s.Tile + ")" : "") + " - changes apply to this set."
+                : "Editing " + s.Material + (s.Tile != 1001 ? " (tile " + s.Tile + ")" : "") + " - it has no textures yet: Auto-Fill or drop them in.";
+        }
+
+        private void OnMatchClick(object sender, EventArgs e)
+        {
+            if (_sets == null) { txtStatus.Text = "Load a model first."; return; }
+            SaveUiToSet(_cur);
+            string folder = PreviewTexturePath() != null ? Path.GetDirectoryName(PreviewTexturePath()) : FirstTextureFolder();
+            if (folder == null)
+            {
+                folder = FolderPicker.Pick(this, "Folder with this model's textures", Path.GetDirectoryName(_modelPath));
+                if (folder == null) return;
+            }
+            bool curWasEmpty = _cur != null && !_cur.HasTextures;
+            int n = MaterialSets.AutoMatch(_sets, folder);
+            if (curWasEmpty && _cur.HasTextures)
+                LoadSetToUi(_cur);
+            RebuildSetList();
+            LoadAllSetMaps();
+            SaveSets();
+            int missing = _sets.FindAll(delegate(MaterialSet s) { return !s.HasTextures; }).Count;
+            txtStatus.Text = string.Format("Matched {0} set(s) from {1}.{2}", n, folder,
+                missing > 0 ? " " + missing + " still without textures - select one and Auto-Fill / drop its textures." : " Every set has textures.");
+        }
+
+        private void OnExportSetsClick(object sender, EventArgs e)
+        {
+            if (_sets == null) return;
+            SaveUiToSet(_cur);
+            MaterialSet keep = _cur;
+            List<string> log = new List<string>();
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                foreach (MaterialSet s in _sets)
+                {
+                    if (!s.HasTextures) continue;
+                    _cur = s;
+                    LoadSetToUi(s);
+                    log.Add("== " + s.Material + (s.Tile != 1001 ? " (tile " + s.Tile + ")" : ""));
+                    try { ExportAll(log); }
+                    catch (Exception ex) { log.Add("ERROR: " + ex.Message); }
+                }
+            }
+            finally
+            {
+                _cur = keep;
+                if (keep != null) LoadSetToUi(keep);
+                Cursor = Cursors.Default;
+            }
+            if (log.Count == 0)
+                log.Add("No texture sets with textures to export.");
+            txtStatus.Text = string.Join(Environment.NewLine, log.ToArray());
+            SaveSets();
+        }
+
+        private void SaveSets()
+        {
+            if (_sets != null && _modelPath != null)
+                MaterialSets.Save(_modelPath, _sets, _cur);
+        }
+
+        private void QueuePreviewTexture()
+        {
+            _texTimer.Stop();
+            _texTimer.Start();
+        }
+
+        // debounced: the current set changed - reload its maps onto the model and save the sets
+        private void RefreshPreviewTexture()
+        {
+            if (_mesh == null || _cur == null)
+                return;
+            LoadSetMaps(new MaterialSet[] { _cur });
+            SaveSets();
+        }
+
+        private void LoadAllSetMaps()
+        {
+            if (_sets == null) return;
+            List<MaterialSet> list = new List<MaterialSet>();
+            foreach (MaterialSet s in _sets)
+            {
+                if (s.MapCount > 0) list.Add(s);
+                else _model3d.ClearGroupMaps(s.Key);
+            }
+            LoadSetMaps(list.ToArray());
+        }
+
+        // Builds each set's albedo / normal / packed AO-rough-metal (same channels + defaults as the export)
+        // on a worker thread, one set after another, and puts them on the model.
+        private void LoadSetMaps(MaterialSet[] sets)
+        {
+            if (sets.Length == 0) return;
+            List<KeyValuePair<MaterialSet, int>> jobs = new List<KeyValuePair<MaterialSet, int>>();
+            foreach (MaterialSet s in sets)
+            {
+                int j;
+                _setJobs.TryGetValue(s.Key, out j);
+                _setJobs[s.Key] = ++j;
+                // snapshot: the set may be edited while we load
+                MaterialSet copy = (MaterialSet)s.GetType().GetMethod("MemberwiseClone", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).Invoke(s, null);
+                jobs.Add(new KeyValuePair<MaterialSet, int>(copy, j));
+            }
+            _mapLoads++;
+            UpdateLoadingLabel();
+            int maxSize = PreviewMaxSize();
+            System.Threading.Thread t = new System.Threading.Thread(delegate()
+            {
+                foreach (KeyValuePair<MaterialSet, int> job in jobs)
+                {
+                    MaterialSet s = job.Key;
+                    GLImage alb = null, nrm = null, orm = null;
+                    string err = null;
+                    try { BuildPreviewMaps(s, maxSize, out alb, out nrm, out orm); }
+                    catch (Exception ex) { err = ex.Message; }
+                    int jobId = job.Value;
+                    BeginInvoke((Action)delegate
+                    {
+                        int latest;
+                        _setJobs.TryGetValue(s.Key, out latest);
+                        if (latest != jobId) return;
+                        if (err != null) txtStatus.Text = "3D preview: could not load maps of " + s.Material + " - " + err;
+                        _model3d.SetGroupMaps(s.Key, alb, nrm, orm, s.FlipGreen);
+                    });
+                }
+                BeginInvoke((Action)delegate { _mapLoads--; UpdateLoadingLabel(); });
+            });
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        private void UpdateLoadingLabel()
+        {
+            string txt = _lblModel.Text.Replace("  (loading maps...)", "");
+            _lblModel.Text = _mapLoads > 0 ? txt + "  (loading maps...)" : txt;
+        }
+
+        // The preview shows textures at the export size (same bicubic downscale), so what you see is what you export.
+        private int PreviewMaxSize()
+        {
+            int v;
+            return int.TryParse((string)cmbMaxSize.SelectedItem, out v) ? v : 16384; // Auto = the source's own size
+        }
+
+        private static void BuildPreviewMaps(MaterialSet s, int maxSize, out GLImage alb, out GLImage nrm, out GLImage orm)
+        {
+            string basePath = s.Base.Length > 0 ? s.Base : null, nrmPath = s.Normal.Length > 0 ? s.Normal : null;
+            string roughPath = s.Rough.Length > 0 ? s.Rough : null, metalPath = s.Metal.Length > 0 ? s.Metal : null, aoPath = s.Ao.Length > 0 ? s.Ao : null;
+            byte roughDef = (byte)Math.Round(s.RoughDef * 255), metalDef = (byte)Math.Round(s.MetalDef * 255), aoDef = (byte)Math.Round(s.AoDef * 255);
+            // the maps decode in parallel - 4K PNGs are slow to decode one after another
+            GLImage pa = null, pn = null;
+            System.Threading.Tasks.Task ta = System.Threading.Tasks.Task.Factory.StartNew(delegate
+            {
+                if (basePath != null) using (Bitmap b = Packer.LoadBitmap(basePath)) pa = GLImage.FromBitmap(b, maxSize);
+            });
+            System.Threading.Tasks.Task tn = System.Threading.Tasks.Task.Factory.StartNew(delegate
+            {
+                if (nrmPath != null) using (Bitmap b = Packer.LoadBitmap(nrmPath)) pn = GLImage.FromBitmap(b, maxSize);
+            });
+            if (roughPath != null || metalPath != null || aoPath != null)
+            {
+                // an ORM file sits in all three slots - decode each file once, at the size of the first one
+                Dictionary<string, Bitmap> cache = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    int w = 0, h = 0;
+                    foreach (string p in new string[] { aoPath, roughPath, metalPath })
+                    {
+                        if (p == null || cache.ContainsKey(p)) continue;
+                        Bitmap b = Packer.LoadBitmap(p);
+                        if (w == 0)
+                        {
+                            double sc = Math.Min(1.0, (double)maxSize / Math.Max(b.Width, b.Height));
+                            w = Math.Max(1, (int)(b.Width * sc));
+                            h = Math.Max(1, (int)(b.Height * sc));
+                        }
+                        cache[p] = Packer.EnsureSize(b, w, h);
+                    }
+                    byte[] ao = PreviewChannel(cache, aoPath, s.AoCh, false);
+                    byte[] ro = PreviewChannel(cache, roughPath, s.RoughCh, s.RoughInvert);
+                    byte[] me = PreviewChannel(cache, metalPath, s.MetalCh, false);
+                    using (Bitmap packed = Packer.Compose(w, h, ao, aoDef, ro, roughDef, me, metalDef, null, 255))
+                        orm = GLImage.FromBitmap(packed, maxSize);
+                }
+                finally
+                {
+                    foreach (Bitmap b in cache.Values) b.Dispose();
+                }
+            }
+            else
+            {
+                using (Bitmap flat = Packer.Compose(1, 1, null, aoDef, null, roughDef, null, metalDef, null, 255))
+                    orm = GLImage.FromBitmap(flat, 1);
+            }
+            System.Threading.Tasks.Task.WaitAll(ta, tn);
+            alb = pa;
+            nrm = pn;
+        }
+
+        private static byte[] PreviewChannel(Dictionary<string, Bitmap> cache, string path, string channel, bool invert)
+        {
+            if (path == null)
+                return null;
+            byte[] v = Packer.ExtractChannel(cache[path], channel ?? "R");
+            if (invert) Packer.Invert(v);
+            return v;
+        }
+
+        // ---- project files (.rtp) --------------------------------------------------------
+
+        private void UpdateTitle()
+        {
+            Text = "Reforger Texture Packer - by Modest23" + (_projectPath != null ? "   -   " + Path.GetFileName(_projectPath) : "");
+        }
+
+        private void SaveProject(bool saveAs)
+        {
+            string path = _projectPath;
+            if (path == null || saveAs)
+            {
+                using (SaveFileDialog dlg = new SaveFileDialog())
+                {
+                    dlg.Title = "Save texture packer project";
+                    dlg.Filter = "Texture Packer project (*.rtp)|*.rtp";
+                    dlg.DefaultExt = "rtp";
+                    string near = _modelPath ?? PreviewTexturePath();
+                    if (near != null) dlg.InitialDirectory = Path.GetDirectoryName(near);
+                    dlg.FileName = _modelPath != null ? Path.GetFileNameWithoutExtension(_modelPath)
+                        : (txtBaseName.Text.Trim().Length > 0 ? txtBaseName.Text.Trim() : "Textures");
+                    if (dlg.ShowDialog(this) != DialogResult.OK)
+                        return;
+                    path = dlg.FileName;
+                }
+            }
+            try
+            {
+                List<MaterialSet> sets = _sets;
+                MaterialSet cur = _cur;
+                if (cur != null)
+                    SaveUiToSet(cur);
+                if (sets == null)
+                {
+                    // no model: the project is just what's in the slots
+                    cur = new MaterialSet();
+                    SaveUiToSet(cur);
+                    sets = new List<MaterialSet>();
+                    sets.Add(cur);
+                }
+                StringBuilder head = new StringBuilder();
+                head.AppendLine("# Reforger Texture Packer project");
+                head.AppendLine("rtp=1");
+                head.AppendLine("model=" + (_modelPath ?? ""));
+                head.AppendLine("maxsize=" + cmbMaxSize.SelectedItem);
+                head.AppendLine("show=" + _cmbShow.SelectedIndex);
+                File.WriteAllText(path, MaterialSets.Serialize(sets, cur, head.ToString()));
+                _projectPath = path;
+                Prefs.Set("lastproject", path);
+                UpdateTitle();
+                int withTex = sets.FindAll(delegate(MaterialSet s) { return s.HasTextures; }).Count;
+                txtStatus.Text = string.Format("Saved project {0}  ({1} texture set(s), {2} with textures{3}).", path, sets.Count, withTex,
+                    _modelPath != null ? ", model " + Path.GetFileName(_modelPath) : "");
+            }
+            catch (Exception ex)
+            {
+                txtStatus.Text = "Could not save the project: " + ex.Message;
+            }
+        }
+
+        private void OnOpenProjectClick()
+        {
+            using (OpenFileDialog dlg = new OpenFileDialog())
+            {
+                dlg.Title = "Open texture packer project";
+                dlg.Filter = "Texture Packer project (*.rtp)|*.rtp|All files|*.*";
+                string last = Prefs.Get("lastproject", "");
+                if (last.Length > 0 && File.Exists(last))
+                {
+                    dlg.InitialDirectory = Path.GetDirectoryName(last);
+                    dlg.FileName = Path.GetFileName(last);
+                }
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                    OpenProject(dlg.FileName);
+            }
+        }
+
+        private void OpenProject(string path)
+        {
+            string[] lines;
+            try { lines = File.ReadAllLines(path); }
+            catch (Exception ex) { txtStatus.Text = "Could not open the project: " + ex.Message; return; }
+            string model = "", maxsize = null;
+            int show = -1;
+            foreach (string l in lines)
+            {
+                if (l.StartsWith("[")) break;
+                if (l.StartsWith("model=")) model = l.Substring(6);
+                else if (l.StartsWith("maxsize=")) maxsize = l.Substring(8);
+                else if (l.StartsWith("show=")) int.TryParse(l.Substring(5), out show);
+            }
+            // keep what's open now in its per-model autosave before switching
+            if (_cur != null && _modelPath != null)
+            {
+                SaveUiToSet(_cur);
+                SaveSets();
+            }
+            _projectPath = path;
+            Prefs.Set("lastproject", path);
+            UpdateTitle();
+            if (maxsize != null) cmbMaxSize.SelectedItem = maxsize;
+            if (show >= 0 && show < _cmbShow.Items.Count) _cmbShow.SelectedIndex = show;
+
+            if (model.Length > 0 && File.Exists(model))
+            {
+                // BuildSets applies these once the model has loaded
+                _pendingProject = lines;
+                LoadModel(model);
+                txtStatus.Text = "Opening project " + Path.GetFileName(path) + " - loading " + Path.GetFileName(model) + "...";
+                return;
+            }
+            // no model (or it has moved): bring back the sets as they were, just without the 3D view
+            List<MaterialSet> sets = MaterialSets.FromLines(lines);
+            string curKey = MaterialSets.RestoreLines(lines, sets);
+            MaterialSet cur = sets.Find(delegate(MaterialSet s) { return s.Key == curKey; }) ?? (sets.Count > 0 ? sets[0] : null);
+            if (model.Length > 0)
+            {
+                // several sets but no model: still let the user switch between them in the list
+                _sets = sets.Count > 1 ? sets : null;
+                _cur = sets.Count > 1 ? cur : null;
+                RebuildSetList();
+            }
+            if (cur != null) LoadSetToUi(cur);
+            txtStatus.Text = model.Length > 0
+                ? "Opened " + Path.GetFileName(path) + ", but its model wasn't found (" + model + ") - textures restored; use Load model... to point at it again."
+                : "Opened project " + Path.GetFileName(path) + ".";
+        }
+
         private void OnOutBrowseClick(object sender, EventArgs e)
         {
-            using (FolderBrowserDialog dlg = new FolderBrowserDialog())
-            {
-                dlg.Description = "Select output folder";
-                if (Directory.Exists(txtOutDir.Text.Trim()))
-                    dlg.SelectedPath = txtOutDir.Text.Trim();
-                if (dlg.ShowDialog(this) == DialogResult.OK)
-                    txtOutDir.Text = dlg.SelectedPath;
-            }
+            string picked = FolderPicker.Pick(this, "Select output folder", txtOutDir.Text.Trim());
+            if (picked != null)
+                txtOutDir.Text = picked;
         }
 
         private void OnOpenOutClick(object sender, EventArgs e)

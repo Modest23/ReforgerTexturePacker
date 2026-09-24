@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace ReforgerTexturePacker
 {
@@ -67,23 +68,36 @@ namespace ReforgerTexturePacker
             return false;
         }
 
+        // Substance-style UDIM tile at the end of the name ("_BaseColor.1001") - split off before matching.
+        public static string SplitUdim(string name, out string tile)
+        {
+            Match m = Regex.Match(name, @"[._](1\d{3})$");
+            tile = m.Success ? m.Groups[1].Value : "";
+            return m.Success ? name.Substring(0, m.Index) : name;
+        }
+
         public static string DeriveBaseName(string path)
         {
-            string name = Path.GetFileNameWithoutExtension(path);
+            string tile;
+            string name = SplitUdim(Path.GetFileNameWithoutExtension(path), out tile);
             string bl; MapType t; string tok;
             if (TryStripSuffix(name.ToLowerInvariant(), out bl, out t, out tok))
-                return name.Substring(0, bl.Length);
-            return name;
+                name = name.Substring(0, bl.Length);
+            return tile.Length > 0 ? name.TrimEnd(Seps) + "_" + tile : name;
         }
 
         public static TextureSetResult Match(string droppedPath)
         {
             TextureSetResult res = new TextureSetResult();
             res.Folder = Path.GetDirectoryName(droppedPath);
-            string name = Path.GetFileNameWithoutExtension(droppedPath);
+            string tile;
+            string name = SplitUdim(Path.GetFileNameWithoutExtension(droppedPath), out tile);
             string baseLower; MapType dt; string dtok;
             TryStripSuffix(name.ToLowerInvariant(), out baseLower, out dt, out dtok);
             res.BaseName = name.Substring(0, baseLower.Length);
+            // keep the tile in the output name so tile 1001 and 1002 exports don't overwrite each other
+            if (tile.Length > 0)
+                res.BaseName = res.BaseName.TrimEnd(Seps) + "_" + tile;
 
             HashSet<string> exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 { ".png", ".tif", ".tiff", ".tga", ".jpg", ".jpeg", ".bmp" };
@@ -99,7 +113,10 @@ namespace ReforgerTexturePacker
             {
                 if (!exts.Contains(Path.GetExtension(f)))
                     continue;
-                string fl = Path.GetFileNameWithoutExtension(f).ToLowerInvariant();
+                string ftile;
+                string fl = SplitUdim(Path.GetFileNameWithoutExtension(f), out ftile).ToLowerInvariant();
+                if (ftile != tile)
+                    continue; // other UDIM tile (or tiled vs untiled) - not this set
                 string fb; MapType ft; string ftok;
                 if (!TryStripSuffix(fl, out fb, out ft, out ftok))
                 {
